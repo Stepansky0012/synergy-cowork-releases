@@ -1,0 +1,220 @@
+concurrency: ${{ github.workflow }}-${{ github.ref }}
+
+permissions:
+  contents: write
+
+env:
+  OPENCODE_CHANNEL: prod
+  SYNERGY_UNSIGNED: "1"
+
+jobs:
+  version:
+    runs-on: ubuntu-24.04
+    outputs:
+      version: ${{ steps.v.outputs.version }}
+    steps:
+      - uses: actions/checkout@f43a0e5ff2bd294095638e18286ca9a3d1956744 # v3.6.0
+      - id: v
+        run: |
+          v="${{ inputs.version }}"
+          if [ -z "$v" ] && [[ "$GITHUB_REF_NAME" == synergy-v* ]]; then v="${GITHUB_REF_NAME#synergy-v}"; fi
+          # Версия приложения — только явная (тег synergy-vX.Y.Z или поле version): корневой package.json
+          # хранит версию OpenCode, а не Synergy CoWork.
+          if [ -z "$v" ]; then echo "::error::Укажите версию Synergy CoWork (тег synergy-vX.Y.Z или поле version)"; exit 1; fi
+          echo "version=$v" >> "$GITHUB_OUTPUT"
+
+  build-cli:
+    needs: version
+    runs-on: ubuntu-24.04
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@f43a0e5ff2bd294095638e18286ca9a3d1956744 # v3.6.0
+      - uses: ./.github/actions/setup-bun
+        with:
+          bun-version: 1.4.2
+      # Движок сообщает серверам OpenCode версию самого OpenCode (packages/cli/package.json, обновляется
+      # синхронизацией с upstream), а не версию Synergy CoWork: сервер бесплатных моделей отказывает
+      # клиентам ниже 1.18.0, а у приложения своя нумерация 0.0.x. Метка сборки «+synergy.<версия>»
+      # делает версию движка уникальной для выпуска: приложение копирует движок в папку по его версии и
+      # переиспользует запущенный фоновый движок той же версии — без метки обновление оставило бы старый.
+      - name: Build CLI (все платформы)
+        run: OPENCODE_VERSION="$(jq -r .version packages/cli/package.json)+synergy.${{ needs.version.outputs.version }}" ./packages/cli/script/build.ts
+        env:
+          BUN_COMPILE_RELEASE: bun-v1.4.2
+          # CLI — релизный канал latest, как в upstream; prod относится только к десктопу. С каналом prod
+          # CLI регистрировался в service-prod.json, а десктоп ждал service.json и не находил сервер.
+          OPENCODE_CHANNEL: latest
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: cli
+          path: packages/cli/dist/cli-*
+
+      # Белый список бесплатных моделей OpenCode: только те, что ответили на тестовый запрос этим CLI.
+      # Если проверка не удалась целиком — пустой список, бесплатных моделей в выпуске не будет.
+      - name: Проверка бесплатных моделей
+        run: |
+          node synergy/check-free-models.mjs packages/cli/dist/cli-linux-x64/bin/opencode synergy-free-models.json             || echo "[]" > synergy-free-models.json
+          cat synergy-free-models.json
+
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: free-models
+          path: synergy-free-models.json
+
+  build-desktop:
+    needs: [version, build-cli]
+    strategy:
+      fail-fast: false
+      matrix:
+        settings:
+          - host: windows-2025
+            target: x86_64-pc-windows-msvc
+            platform_flag: --win
+          - host: macos-26
+            target: aarch64-apple-darwin
+            platform_flag: --mac --arm64
+            bun_install_flags: --os=darwin --cpu=arm64
+          - host: macos-26-intel
+            target: x86_64-apple-darwin
+            platform_flag: --mac --x64
+            bun_install_flags: --os=darwin --cpu=x64
+          - host: ubuntu-24.04
+            target: x86_64-unknown-linux-gnu
+            platform_flag: --linux
+    runs-on: ${{ matrix.settings.host }}
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@f43a0e5ff2bd294095638e18286ca9a3d1956744 # v3.6.0
+
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          name: cli
+          path: packages/cli/dist
+
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          name: free-models
+          path: packages/desktop/resources
+
+      - uses: ./.github/actions/setup-bun
+        with:
+          install-flags: ${{ matrix.settings.bun_install_flags }}
+
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: "24"
+
+      - name: rpm (linux)
+        if: runner.os == 'Linux'
+        run: sudo apt-get update && sudo apt-get install -y --no-install-recommends rpm
+
+      - name: Prepare
+        run: bun ./scripts/prepare.ts
+        working-directory: packages/desktop
+        env:
+          OPENCODE_VERSION: ${{ needs.version.outputs.version }}
+          OPENCODE_CLI_TARGET: ${{ matrix.settings.target }}
+          OPENCODE_CLI_DIST: ${{ github.workspace }}/packages/cli/dist
+
+      - name: Build
+        run: bun run build
+        working-directory: packages/desktop
+        env:
+          NODE_OPTIONS: --max-old-space-size=4096
+          OPENCODE_VERSION: ${{ needs.version.outputs.version }}
+          OPENCODE_CLI_TARGET: ${{ matrix.settings.target }}
+          OPENCODE_CLI_DIST: ${{ github.workspace }}/packages/cli/dist
+
+      # Карты исходников (~63 МБ) в upstream уходят в Sentry; без Sentry они только раздувают приложение.
+      - name: Убрать source maps
+        shell: bash
+        run: find packages/desktop/out -name '*.map' -type f -delete
+
+      # Самоподписанный сертификат (synergy/macos-signing.cer, ключ в секретах): codesign видит его как
+      # действительную identity только после доверия к нему. Один сертификат на все версии — условие
+      # автообновления на macOS.
+      # Связка ключей создаётся здесь, а не через CSC_LINK: на macOS 26 electron-builder не может
+      # разблокировать собственную временную связку (set-key-partition-list).
+      - name: Сертификат подписи (macOS)
+        if: runner.os == 'macOS'
+        run: |
+          keychain="$RUNNER_TEMP/signing.keychain-db"
+          password="$(openssl rand -hex 16)"
+          echo "$CERT_P12" | base64 --decode > "$RUNNER_TEMP/signing.p12"
+          security create-keychain -p "$password" "$keychain"
+          security set-keychain-settings -lut 21600 "$keychain"
+          security unlock-keychain -p "$password" "$keychain"
+          security import "$RUNNER_TEMP/signing.p12" -k "$keychain" -P "$CERT_PASSWORD" -T /usr/bin/codesign -T /usr/bin/security
+          security set-key-partition-list -S apple-tool:,apple:,codesign: -s -k "$password" "$keychain" > /dev/null
+          security list-keychains -d user -s "$keychain" $(security list-keychains -d user | tr -d '"')
+          rm "$RUNNER_TEMP/signing.p12"
+          sudo security add-trusted-cert -d -r trustRoot -p codeSign -k /Library/Keychains/System.keychain synergy/macos-signing.cer
+          security find-identity -v -p codesigning
+        env:
+          CERT_P12: ${{ secrets.SYNERGY_MAC_CERT_P12 }}
+          CERT_PASSWORD: ${{ secrets.SYNERGY_MAC_CERT_PASSWORD }}
+
+      - name: Package
+        run: npx electron-builder ${{ matrix.settings.platform_flag }} --publish never --config electron-builder.config.ts
+        working-directory: packages/desktop
+        timeout-minutes: 60
+        env:
+          CSC_IDENTITY_AUTO_DISCOVERY: "false"
+          SYNERGY_MAC_IDENTITY: ${{ runner.os == 'macOS' && 'Synergy CoWork Self-Signed' || '' }}
+
+      # Обе macOS-сборки пишут latest-mac.yml со своей архитектурой; в релизе они сливаются в один.
+      - name: latest-mac.yml по архитектуре
+        if: runner.os == 'macOS'
+        run: mv dist/latest-mac.yml "dist/latest-mac-${{ matrix.settings.target }}.yml"
+        working-directory: packages/desktop
+
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: synergy-cowork-${{ matrix.settings.target }}
+          path: |
+            packages/desktop/dist/*.exe
+            packages/desktop/dist/*.dmg
+            packages/desktop/dist/*.zip
+            packages/desktop/dist/*.AppImage
+            packages/desktop/dist/*.deb
+            packages/desktop/dist/*.rpm
+            packages/desktop/dist/*.blockmap
+            packages/desktop/dist/latest.yml
+            packages/desktop/dist/latest-linux.yml
+            packages/desktop/dist/latest-mac-*.yml
+
+  release:
+    if: startsWith(github.ref, 'refs/tags/synergy-v')
+    needs: [version, build-desktop]
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          pattern: synergy-cowork-*
+          path: dist
+          merge-multiple: true
+      - name: Общий latest-mac.yml
+        working-directory: dist
+        run: |
+          arm=latest-mac-aarch64-apple-darwin.yml x64=latest-mac-x86_64-apple-darwin.yml
+          { sed -n '1,/^path:/p' $arm | sed '$d'; sed -n '/^files:/,/^path:/p' $x64 | sed '1d;$d'; sed -n '/^path:/,$p' $arm; } > latest-mac.yml
+          rm $arm $x64
+          cat latest-mac.yml
+
+      # electron-updater (provider github) читает latest.yml, latest-linux.yml и latest-mac.yml из этого релиза.
+      - name: Релиз в synergy-cowork-releases
+        run: |
+          repo=Stepansky0012/synergy-cowork-releases
+          if gh release view "v$VERSION" -R $repo >/dev/null 2>&1; then
+            # Релиз уже есть (например, Windows собран локально): дополняем только недостающими файлами.
+            have=$(gh release view "v$VERSION" -R $repo --json assets -q '.assets[].name')
+            for f in dist/*; do
+              grep -qxF "$(basename "$f")" <<<"$have" || gh release upload "v$VERSION" "$f" -R $repo
+            done
+          else
+            gh release create "v$VERSION" dist/* -R $repo --latest \
+              --title "Synergy CoWork $VERSION" --notes "Дистрибутивы Synergy CoWork Desktop $VERSION. Windows — без подписи, macOS — самоподписанный сертификат."
+          fi
+        env:
+          VERSION: ${{ needs.version.outputs.version }}
+          GH_TOKEN: ${{ secrets.SYNERGY_RELEASES_TOKEN }}

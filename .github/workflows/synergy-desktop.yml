@@ -1,0 +1,219 @@
+# Synergy CoWork: сборка дистрибутивов Windows, macOS и Linux. Сборка идёт здесь, в публичном
+# репозитории выпусков (GitHub Actions для публичных репозиториев бесплатен). Исходники берутся из
+# закрытого Stepansky0012/synergy-cowork по тегу synergy-v<версия>: секрет SYNERGY_SOURCE_TOKEN —
+# токен с доступом на чтение к закрытому репозиторию.
+#
+# Запуск: Actions → «Synergy CoWork desktop» → Run workflow → версия (например 0.0.33).
+# Если выпуск v<версия> уже есть (например, Windows собран локально), он дополняется недостающими файлами.
+name: Synergy CoWork desktop
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "Версия Synergy CoWork (в закрытом репозитории должен быть тег synergy-v<версия>)"
+        required: true
+
+concurrency: ${{ github.workflow }}-${{ inputs.version }}
+
+permissions:
+  contents: write
+
+env:
+  OPENCODE_CHANNEL: prod
+  SYNERGY_UNSIGNED: "1"
+
+jobs:
+  build-cli:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@f43a0e5ff2bd294095638e18286ca9a3d1956744 # v3.6.0
+        with:
+          repository: Stepansky0012/synergy-cowork
+          ref: synergy-v${{ inputs.version }}
+          token: ${{ secrets.SYNERGY_SOURCE_TOKEN }}
+      - uses: ./.github/actions/setup-bun
+        with:
+          bun-version: 1.4.2
+      # Версия движка — версия OpenCode с меткой выпуска: сервер бесплатных моделей требует OpenCode
+      # не ниже 1.18.0, а метка делает движок уникальным для выпуска (иначе обновление оставит старый).
+      - name: Build CLI (все платформы)
+        run: OPENCODE_VERSION="$(jq -r .version packages/cli/package.json)+synergy.${{ inputs.version }}" ./packages/cli/script/build.ts
+        env:
+          BUN_COMPILE_RELEASE: bun-v1.4.2
+          OPENCODE_CHANNEL: latest
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: cli
+          path: packages/cli/dist/cli-*
+
+      # Белый список бесплатных моделей: только те, что ответили на тестовый запрос этим CLI.
+      # Если проверка не удалась целиком — берётся список из исходников.
+      - name: Проверка бесплатных моделей
+        run: |
+          node synergy/check-free-models.mjs packages/cli/dist/cli-linux-x64/bin/opencode synergy-free-models.json \
+            || cp packages/desktop/resources/synergy-free-models.json synergy-free-models.json
+          cat synergy-free-models.json
+
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: free-models
+          path: synergy-free-models.json
+
+  build-desktop:
+    needs: build-cli
+    strategy:
+      fail-fast: false
+      matrix:
+        settings:
+          - host: windows-2025
+            target: x86_64-pc-windows-msvc
+            platform_flag: --win
+          - host: macos-26
+            target: aarch64-apple-darwin
+            platform_flag: --mac --arm64
+            bun_install_flags: --os=darwin --cpu=arm64
+          - host: macos-26-intel
+            target: x86_64-apple-darwin
+            platform_flag: --mac --x64
+            bun_install_flags: --os=darwin --cpu=x64
+          - host: ubuntu-24.04
+            target: x86_64-unknown-linux-gnu
+            platform_flag: --linux
+    runs-on: ${{ matrix.settings.host }}
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@f43a0e5ff2bd294095638e18286ca9a3d1956744 # v3.6.0
+        with:
+          repository: Stepansky0012/synergy-cowork
+          ref: synergy-v${{ inputs.version }}
+          token: ${{ secrets.SYNERGY_SOURCE_TOKEN }}
+
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          name: cli
+          path: packages/cli/dist
+
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          name: free-models
+          path: packages/desktop/resources
+
+      - uses: ./.github/actions/setup-bun
+        with:
+          install-flags: ${{ matrix.settings.bun_install_flags }}
+
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: "24"
+
+      - name: rpm (linux)
+        if: runner.os == 'Linux'
+        run: sudo apt-get update && sudo apt-get install -y --no-install-recommends rpm
+
+      - name: Prepare
+        run: bun ./scripts/prepare.ts
+        working-directory: packages/desktop
+        env:
+          OPENCODE_VERSION: ${{ inputs.version }}
+          OPENCODE_CLI_TARGET: ${{ matrix.settings.target }}
+          OPENCODE_CLI_DIST: ${{ github.workspace }}/packages/cli/dist
+
+      - name: Build
+        run: bun run build
+        working-directory: packages/desktop
+        env:
+          NODE_OPTIONS: --max-old-space-size=4096
+          OPENCODE_VERSION: ${{ inputs.version }}
+          OPENCODE_CLI_TARGET: ${{ matrix.settings.target }}
+          OPENCODE_CLI_DIST: ${{ github.workspace }}/packages/cli/dist
+
+      - name: Убрать source maps
+        shell: bash
+        run: find packages/desktop/out -name '*.map' -type f -delete
+
+      # Самоподписанный сертификат (synergy/macos-signing.cer, ключ в секретах). Один сертификат на все
+      # версии — условие автообновления на macOS.
+      - name: Сертификат подписи (macOS)
+        if: runner.os == 'macOS'
+        run: |
+          keychain="$RUNNER_TEMP/signing.keychain-db"
+          password="$(openssl rand -hex 16)"
+          echo "$CERT_P12" | base64 --decode > "$RUNNER_TEMP/signing.p12"
+          security create-keychain -p "$password" "$keychain"
+          security set-keychain-settings -lut 21600 "$keychain"
+          security unlock-keychain -p "$password" "$keychain"
+          security import "$RUNNER_TEMP/signing.p12" -k "$keychain" -P "$CERT_PASSWORD" -T /usr/bin/codesign -T /usr/bin/security
+          security set-key-partition-list -S apple-tool:,apple:,codesign: -s -k "$password" "$keychain" > /dev/null
+          security list-keychains -d user -s "$keychain" $(security list-keychains -d user | tr -d '"')
+          rm "$RUNNER_TEMP/signing.p12"
+          sudo security add-trusted-cert -d -r trustRoot -p codeSign -k /Library/Keychains/System.keychain synergy/macos-signing.cer
+          security find-identity -v -p codesigning
+        env:
+          CERT_P12: ${{ secrets.SYNERGY_MAC_CERT_P12 }}
+          CERT_PASSWORD: ${{ secrets.SYNERGY_MAC_CERT_PASSWORD }}
+
+      - name: Package
+        run: npx electron-builder ${{ matrix.settings.platform_flag }} --publish never --config electron-builder.config.ts
+        working-directory: packages/desktop
+        timeout-minutes: 60
+        env:
+          CSC_IDENTITY_AUTO_DISCOVERY: "false"
+          SYNERGY_MAC_IDENTITY: ${{ runner.os == 'macOS' && 'Synergy CoWork Self-Signed' || '' }}
+
+      # Обе macOS-сборки пишут latest-mac.yml со своей архитектурой; в релизе они сливаются в один.
+      - name: latest-mac.yml по архитектуре
+        if: runner.os == 'macOS'
+        run: mv dist/latest-mac.yml "dist/latest-mac-${{ matrix.settings.target }}.yml"
+        working-directory: packages/desktop
+
+      # Только установщики: промежуточные файлы сборки в публичный репозиторий не выкладываются.
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: synergy-cowork-${{ matrix.settings.target }}
+          retention-days: 1
+          path: |
+            packages/desktop/dist/*.exe
+            packages/desktop/dist/*.dmg
+            packages/desktop/dist/*.zip
+            packages/desktop/dist/*.AppImage
+            packages/desktop/dist/*.deb
+            packages/desktop/dist/*.rpm
+            packages/desktop/dist/*.blockmap
+            packages/desktop/dist/latest.yml
+            packages/desktop/dist/latest-linux.yml
+            packages/desktop/dist/latest-mac-*.yml
+
+  release:
+    needs: build-desktop
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          pattern: synergy-cowork-*
+          path: dist
+          merge-multiple: true
+      - name: Общий latest-mac.yml
+        working-directory: dist
+        run: |
+          arm=latest-mac-aarch64-apple-darwin.yml x64=latest-mac-x86_64-apple-darwin.yml
+          { sed -n '1,/^path:/p' $arm | sed '$d'; sed -n '/^files:/,/^path:/p' $x64 | sed '1d;$d'; sed -n '/^path:/,$p' $arm; } > latest-mac.yml
+          rm $arm $x64
+          cat latest-mac.yml
+
+      # electron-updater читает latest.yml, latest-linux.yml и latest-mac.yml из этого выпуска.
+      - name: Выпуск
+        run: |
+          if gh release view "v$VERSION" -R "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            have=$(gh release view "v$VERSION" -R "$GITHUB_REPOSITORY" --json assets -q '.assets[].name')
+            for f in dist/*; do
+              grep -qxF "$(basename "$f")" <<<"$have" || gh release upload "v$VERSION" "$f" -R "$GITHUB_REPOSITORY"
+            done
+          else
+            gh release create "v$VERSION" dist/* -R "$GITHUB_REPOSITORY" --latest \
+              --title "Synergy CoWork $VERSION" --notes "Дистрибутивы Synergy CoWork Desktop $VERSION. Windows — без подписи, macOS — самоподписанный сертификат."
+          fi
+        env:
+          VERSION: ${{ inputs.version }}
+          GH_TOKEN: ${{ github.token }}
