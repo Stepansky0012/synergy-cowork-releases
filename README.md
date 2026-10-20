@@ -7,12 +7,9 @@
 | Система | Версия | Установщик |
 | --- | --- | --- |
 | Windows x64 | последняя | [synergy-cowork-win-x64.exe](https://github.com/Stepansky0012/synergy-cowork-releases/releases/latest/download/synergy-cowork-win-x64.exe) |
-| macOS Apple Silicon (M1–M4) | 0.0.31 | [synergy-cowork-mac-arm64.dmg](https://github.com/Stepansky0012/synergy-cowork-releases/releases/download/v0.0.31/synergy-cowork-mac-arm64.dmg) |
-| macOS Intel | 0.0.30 | [synergy-cowork-mac-x64.dmg](https://github.com/Stepansky0012/synergy-cowork-releases/releases/download/v0.0.30/synergy-cowork-mac-x64.dmg) |
-| Linux x64 | 0.0.30 | [AppImage](https://github.com/Stepansky0012/synergy-cowork-releases/releases/download/v0.0.30/synergy-cowork-linux-x86_64.AppImage) · [deb](https://github.com/Stepansky0012/synergy-cowork-releases/releases/download/v0.0.30/synergy-cowork-linux-amd64.deb) · [rpm](https://github.com/Stepansky0012/synergy-cowork-releases/releases/download/v0.0.30/synergy-cowork-linux-x86_64.rpm) |
-
-Сборки macOS и Linux последней версии появятся после очередного выпуска; установленное приложение
-обновится до неё само.
+| macOS Apple Silicon (M1–M4) | последняя | [synergy-cowork-mac-arm64.dmg](https://github.com/Stepansky0012/synergy-cowork-releases/releases/latest/download/synergy-cowork-mac-arm64.dmg) |
+| macOS Intel | последняя | [synergy-cowork-mac-x64.dmg](https://github.com/Stepansky0012/synergy-cowork-releases/releases/latest/download/synergy-cowork-mac-x64.dmg) |
+| Linux x64 | последняя | [AppImage](https://github.com/Stepansky0012/synergy-cowork-releases/releases/latest/download/synergy-cowork-linux-x86_64.AppImage) · [deb](https://github.com/Stepansky0012/synergy-cowork-releases/releases/latest/download/synergy-cowork-linux-amd64.deb) · [rpm](https://github.com/Stepansky0012/synergy-cowork-releases/releases/latest/download/synergy-cowork-linux-x86_64.rpm) |
 
 ## Первый запуск
 
