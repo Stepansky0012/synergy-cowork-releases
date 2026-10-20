@@ -1,18 +1,26 @@
 # Synergy CoWork Desktop
 
-Установщики и обновления Synergy CoWork Desktop — корпоративного ИИ-копайлота Синергии на базе OpenCode.
+Установщики и обновления Synergy CoWork Desktop — корпоративного ИИ-ассистента Синергии.
 
-Скачайте последнюю версию в разделе [Releases](https://github.com/Stepansky0012/synergy-cowork-releases/releases/latest):
+## Скачать
 
-| Система | Файл |
-| --- | --- |
-| Windows x64 | `synergy-cowork-win-x64.exe` |
-| macOS Apple Silicon | `synergy-cowork-mac-arm64.dmg` |
-| macOS Intel | `synergy-cowork-mac-x64.dmg` |
-| Linux | `synergy-cowork-linux-x86_64.AppImage`, `.deb`, `.rpm` |
+| Система | Версия | Установщик |
+| --- | --- | --- |
+| Windows x64 | последняя | [synergy-cowork-win-x64.exe](https://github.com/Stepansky0012/synergy-cowork-releases/releases/latest/download/synergy-cowork-win-x64.exe) |
+| macOS Apple Silicon (M1–M4) | 0.0.31 | [synergy-cowork-mac-arm64.dmg](https://github.com/Stepansky0012/synergy-cowork-releases/releases/download/v0.0.31/synergy-cowork-mac-arm64.dmg) |
+| macOS Intel | 0.0.30 | [synergy-cowork-mac-x64.dmg](https://github.com/Stepansky0012/synergy-cowork-releases/releases/download/v0.0.30/synergy-cowork-mac-x64.dmg) |
+| Linux x64 | 0.0.30 | [AppImage](https://github.com/Stepansky0012/synergy-cowork-releases/releases/download/v0.0.30/synergy-cowork-linux-x86_64.AppImage) · [deb](https://github.com/Stepansky0012/synergy-cowork-releases/releases/download/v0.0.30/synergy-cowork-linux-amd64.deb) · [rpm](https://github.com/Stepansky0012/synergy-cowork-releases/releases/download/v0.0.30/synergy-cowork-linux-x86_64.rpm) |
 
-Установщики пока не подписаны: на Windows нажмите «Подробнее» → «Выполнить в любом случае»,
-на macOS — правый клик по приложению → «Открыть».
+Сборки macOS и Linux последней версии появятся после очередного выпуска; установленное приложение
+обновится до неё само.
 
-Установленное приложение само проверяет этот репозиторий и обновляется
-(Windows, AppImage; на macOS предлагает скачать новую версию).
+## Первый запуск
+
+- **Windows**: если появится «Windows защитила ваш компьютер» — «Подробнее» → «Выполнить в любом случае».
+- **macOS**: правый клик по приложению → «Открыть» → «Открыть».
+
+## Обновления
+
+Приложение само проверяет этот репозиторий и ставит новые версии.
+
+Все выпуски — в разделе [Releases](https://github.com/Stepansky0012/synergy-cowork-releases/releases).
