@@ -11,10 +11,20 @@
 | macOS Intel | последняя | [synergy-cowork-mac-x64.dmg](https://github.com/Stepansky0012/synergy-cowork-releases/releases/latest/download/synergy-cowork-mac-x64.dmg) |
 | Linux x64 | последняя | [AppImage](https://github.com/Stepansky0012/synergy-cowork-releases/releases/latest/download/synergy-cowork-linux-x86_64.AppImage) · [deb](https://github.com/Stepansky0012/synergy-cowork-releases/releases/latest/download/synergy-cowork-linux-amd64.deb) · [rpm](https://github.com/Stepansky0012/synergy-cowork-releases/releases/latest/download/synergy-cowork-linux-x86_64.rpm) |
 
+## Windows: установка без предупреждения
+
+Откройте PowerShell (Пуск → «PowerShell») и вставьте команду:
+
+```powershell
+irm https://raw.githubusercontent.com/Stepansky0012/synergy-cowork-releases/main/install.ps1 | iex
+```
+
+Команда скачает последнюю версию и запустит установщик. Окна «Windows защитила ваш компьютер» не будет.
+
 ## Первый запуск
 
-- **Windows**: если появится «Windows защитила ваш компьютер» — «Подробнее» → «Выполнить в любом случае».
-- **macOS**: правый клик по приложению → «Открыть» → «Открыть».
+- **Windows**, если скачали установщик через браузер: появится «Windows защитила ваш компьютер» — «Подробнее» → «Выполнить в любом случае».
+- **macOS**: запустите приложение, затем «Системные настройки» → «Конфиденциальность и безопасность» → «Всё равно открыть».
 
 ## Обновления
 
